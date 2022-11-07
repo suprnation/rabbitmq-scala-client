@@ -1,33 +1,34 @@
 package com.avast.clients.rabbitmq
 
 import cats.effect._
+import cats.effect.std.Dispatcher
 import cats.syntax.flatMap._
 import com.avast.clients.rabbitmq.api._
 import com.avast.clients.rabbitmq.logging.ImplicitContextLogger
-import com.avast.metrics.scalaeffectapi.Monitor
 import com.rabbitmq.client.ShutdownSignalException
 
 import scala.util.control.NonFatal
 
-class DefaultRabbitMQConnection[F[_]] private (connection: ServerConnection,
-                                               info: RabbitMQConnectionInfo,
-                                               republishStrategy: RepublishStrategyConfig,
-                                               override val connectionListener: ConnectionListener[F],
-                                               override val channelListener: ChannelListener[F],
-                                               override val consumerListener: ConsumerListener[F],
-                                               blocker: Blocker)(implicit F: ConcurrentEffect[F], timer: Timer[F], cs: ContextShift[F])
+class DefaultRabbitMQConnection[F[_]] private (
+    connection: ServerConnection,
+    info: RabbitMQConnectionInfo,
+    republishStrategy: RepublishStrategyConfig,
+    override val connectionListener: ConnectionListener[F],
+    override val channelListener: ChannelListener[F],
+    override val consumerListener: ConsumerListener[F])(implicit F: Dispatcher[F], timer: Temporal[F], async: Async[F])
     extends RabbitMQConnection[F] {
 
   private val logger = ImplicitContextLogger.createLogger[F, DefaultRabbitMQConnection[F]]
 
-  private val factory = new DefaultRabbitMQClientFactory[F](this, info, blocker, republishStrategy)
+  private val factory = new DefaultRabbitMQClientFactory[F](this, info, republishStrategy)
 
   def newChannel(): Resource[F, ServerChannel] = {
     createChannel()
   }
 
   private val createChannelF: F[ServerChannel] = {
-    F.delay {
+    Sync[F]
+      .delay {
         try {
           connection.createChannel() match {
             case channel: ServerChannel =>
@@ -52,36 +53,33 @@ class DefaultRabbitMQConnection[F[_]] private (connection: ServerConnection,
   }
 
   override def newStreamingConsumer[A: DeliveryConverter](
-      consumerConfig: StreamingConsumerConfig,
-      monitor: Monitor[F],
+      consumerConfig: StreamingConsumerConfig
   ): Resource[F, RabbitMQStreamingConsumer[F, A]] = {
     factory.StreamingConsumer
-      .create[A](consumerConfig, monitor, consumerListener)
+      .create[A](consumerConfig, consumerListener)
       .map(identity[RabbitMQStreamingConsumer[F, A]]) // type inference... :-(
   }
 
-  def newConsumer[A: DeliveryConverter](consumerConfig: ConsumerConfig, monitor: Monitor[F])(
+  def newConsumer[A: DeliveryConverter](consumerConfig: ConsumerConfig)(
       readAction: DeliveryReadAction[F, A]): Resource[F, RabbitMQConsumer[F]] = {
-    factory.Consumer.create[A](consumerConfig, consumerListener, readAction, monitor)
+    factory.Consumer.create[A](consumerConfig, consumerListener, readAction)
   }
 
-  def newPullConsumer[A: DeliveryConverter](pullConsumerConfig: PullConsumerConfig,
-                                            monitor: Monitor[F]): Resource[F, RabbitMQPullConsumer[F, A]] = {
-    factory.PullConsumer.create[A](pullConsumerConfig, monitor)
+  def newPullConsumer[A: DeliveryConverter](pullConsumerConfig: PullConsumerConfig): Resource[F, RabbitMQPullConsumer[F, A]] = {
+    factory.PullConsumer.create[A](pullConsumerConfig)
   }
 
   private def createChannel(): Resource[F, ServerChannel] =
     Resource.make(createChannelF)(
       channel =>
         logger.plainDebug(s"Closing channel: $channel ${channel.hashCode()}") >>
-          F.delay {
+          Sync[F].delay {
             channel.close()
         })
 
-  override def newProducer[A: ProductConverter](producerConfig: ProducerConfig,
-                                                monitor: Monitor[F]): Resource[F, RabbitMQProducer[F, A]] = {
+  override def newProducer[A: ProductConverter](producerConfig: ProducerConfig): Resource[F, RabbitMQProducer[F, A]] = {
     factory.Producer
-      .create[A](producerConfig, monitor)
+      .create[A](producerConfig)
   }
 
   override def declareExchange(config: DeclareExchangeConfig): F[Unit] = withChannel { ch =>
@@ -118,7 +116,7 @@ class DefaultRabbitMQConnection[F[_]] private (connection: ServerConnection,
             channel = channel,
           )(logger)
 
-        case _ => F.unit // no-op
+        case _ => Sync[F].unit // no-op
       }
     }
   }
@@ -130,10 +128,12 @@ object DefaultRabbitMQConnection {
                  republishStrategy: RepublishStrategyConfig,
                  connectionListener: ConnectionListener[F],
                  channelListener: ChannelListener[F],
-                 consumerListener: ConsumerListener[F],
-                 blocker: Blocker)(implicit F: ConcurrentEffect[F], timer: Timer[F], cs: ContextShift[F]): F[DefaultRabbitMQConnection[F]] =
-    F.delay {
-        new DefaultRabbitMQConnection(connection, info, republishStrategy, connectionListener, channelListener, consumerListener, blocker)
+                 consumerListener: ConsumerListener[F])(implicit F: Dispatcher[F],
+                                                        timer: Temporal[F],
+                                                        async: Async[F]): F[DefaultRabbitMQConnection[F]] =
+    Sync[F]
+      .delay {
+        new DefaultRabbitMQConnection(connection, info, republishStrategy, connectionListener, channelListener, consumerListener)
       }
       .flatTap { _.setUpRepublishing }
 

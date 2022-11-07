@@ -1,9 +1,6 @@
 package com.avast.clients.rabbitmq
 
-import com.avast.bytes.Bytes
 import com.avast.clients.rabbitmq.api._
-import com.avast.clients.rabbitmq.pureconfig._
-import com.avast.metrics.scalaeffectapi.Monitor
 import com.typesafe.config._
 import monix.eval.Task
 import monix.execution.Scheduler
@@ -11,7 +8,6 @@ import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.time._
 
 import java.util.concurrent._
-import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.jdk.CollectionConverters._
@@ -89,249 +85,249 @@ class PoisonedMessageHandlerLiveTest extends TestBase with ScalaFutures {
    -- > EXCHANGE3 --(test)--> QUEUE2
    */
 
-  test("PoisonedMessageHandler") {
-    val c = createConfig()
-    import c._
+//  test("PoisonedMessageHandler") {
+//    val c = createConfig()
+//    import c._
+//
+//    val messagesCount = Random.nextInt(5000) + 5000 // 5-10k
+//
+//    println(s"Sending $messagesCount messages!")
+//
+//    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
+//      val processed = new AtomicInteger(0)
+//
+//      rabbitConnection
+//        .newConsumer("testingWithPoisonedMessageHandler") { _: Delivery[Bytes] =>
+//          Task {
+//            processed.incrementAndGet()
+//            DeliveryResult.Republish()
+//          }
+//        }
+//        .withResource { _ =>
+//          rabbitConnection.newProducer[Bytes]("testing").withResource { sender =>
+//            // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
+//            rabbitConnection.declareQueue("declareQueue").await
+//            rabbitConnection.bindQueue("bindQueue").await
+//
+//            for (n <- 1 to messagesCount) {
+//              sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
+//            }
+//
+//            eventually(timeout(Span(90, Seconds)), interval(Span(1, Seconds))) {
+//              println(s"PROCESSED COUNT: ${processed.get()}")
+//              assertResult(messagesCount * 2)(processed.get())
+//              assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
+//              assertResult(messagesCount)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
+//            }
+//          }
+//        }
+//    }
+//  }
 
-    val messagesCount = Random.nextInt(5000) + 5000 // 5-10k
+//  test("PoisonedMessageHandler with timeouting messages") {
+//    val c = createConfig()
+//    import c._
+//
+//    val messagesCount = (Random.nextInt(1000) + 1000) * 2 // 2-4k, even
+//
+//    println(s"Sending $messagesCount messages!")
+//
+//    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
+//      val processed = new AtomicInteger(0)
+//
+//      rabbitConnection
+//        .newConsumer[Bytes]("testingWithPoisonedMessageHandler") {
+//          case Delivery.Ok(body, _, _) =>
+//            val n = body.toStringUtf8.toInt
+//
+//            /* This basically means every second message should be timed-out. That will cause it to be republished.
+//             * Thx to maxAttempts = 2, this will be done twice in a row, so the resulting numbers are:
+//             *
+//             *  - processed     = messagesCount * 1.5 (half of messages is "processed" twice)
+//             *  - poisoned      = messagesCount / 2 (half of messages is "thrown away")
+//             *  - rest in queue = 0
+//             *
+//             */
+//
+//            Task {
+//              processed.incrementAndGet()
+//            } >>
+//              sleepIfEven(n, 800.millis) >> // timeout is 500 ms, this need to be quite much longer to be deterministic
+//              Task.now(DeliveryResult.Ack)
+//
+//          case _ => fail()
+//        }
+//        .withResource { _ =>
+//          rabbitConnection.newProducer[Bytes]("testing").withResource { sender =>
+//            // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
+//            rabbitConnection.declareQueue("declareQueue").await
+//            rabbitConnection.bindQueue("bindQueue").await
+//
+//            for (n <- 1 to messagesCount) {
+//              sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
+//            }
+//
+//            eventually(timeout(Span(90, Seconds)), interval(Span(1, Seconds))) {
+//              println(s"PROCESSED COUNT: ${processed.get()}")
+//              assertResult(1.5 * messagesCount)(processed.get())
+//              assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
+//              assertResult(messagesCount / 2)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
+//            }
+//          }
+//        }
+//    }
+//  }
 
-    println(s"Sending $messagesCount messages!")
+//  test("PoisonedMessageHandler pull") {
+//    val c = createConfig()
+//    import c._
+//
+//    val messagesCount = Random.nextInt(2000) + 2000 // only 2-4k, this consumer is just slow
+//
+//    println(s"Sending $messagesCount messages!")
+//
+//    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
+//      val processed = new AtomicInteger(0)
+//
+//      rabbitConnection.newPullConsumer[Bytes]("testingPullWithPoisonedMessageHandler").withResource { cons =>
+//        rabbitConnection.newProducer[Bytes]("testing").withResource { sender =>
+//          // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
+//          rabbitConnection.declareQueue("declareQueue").await
+//          rabbitConnection.bindQueue("bindQueue").await
+//
+//          for (n <- 1 to messagesCount) {
+//            sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
+//          }
+//
+//          // run async:
+//          ex.execute(() => {
+//            while (true) {
+//              cons.pull().await match {
+//                case PullResult.Ok(dwh) =>
+//                  processed.incrementAndGet()
+//                  dwh.handle(DeliveryResult.Republish()).await
+//
+//                case PullResult.EmptyQueue => // 🤷‍
+//              }
+//            }
+//          })
+//
+//          eventually(timeout(Span(90, Seconds)), interval(Span(1, Seconds))) {
+//            println(s"PROCESSED COUNT: ${processed.get()}")
+//            assertResult(2 * messagesCount)(processed.get())
+//            assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
+//            assertResult(messagesCount)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
+//          }
+//        }
+//      }
+//    }
+//  }
 
-    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
-      val processed = new AtomicInteger(0)
+//  test("PoisonedMessageHandler streaming") {
+//    val c = createConfig()
+//    import c._
+//
+//    val messagesCount = Random.nextInt(5000) + 5000 // 5-10k
+//
+//    println(s"Sending $messagesCount messages!")
+//
+//    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
+//      val processed = new AtomicInteger(0)
+//
+//      rabbitConnection.newStreamingConsumer[Bytes]("testingStreamingWithPoisonedMessageHandler").withResource { cons =>
+//        cons.deliveryStream
+//          .evalMap {
+//            _.handleWith { _ =>
+//              Task {
+//                processed.incrementAndGet()
+//                DeliveryResult.Republish()
+//              }
+//            }
+//          }
+//          .compile
+//          .drain
+//          .runToFuture
+//
+//        rabbitConnection.newProducer[Bytes]("testing").withResource { sender =>
+//          // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
+//          rabbitConnection.declareQueue("declareQueue").await
+//          rabbitConnection.bindQueue("bindQueue").await
+//
+//          for (n <- 1 to messagesCount) {
+//            sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
+//          }
+//
+//          eventually(timeout(Span(30, Seconds)), interval(Span(1, Seconds))) {
+//            println(s"PROCESSED COUNT: ${processed.get()}")
+//            // we can't assert the `processed` here - some deliveries may have been cancelled before they were even executed
+//            assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
+//            assertResult(messagesCount)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
+//          }
+//        }
+//      }
+//    }
+//  }
 
-      rabbitConnection
-        .newConsumer("testingWithPoisonedMessageHandler", Monitor.noOp()) { _: Delivery[Bytes] =>
-          Task {
-            processed.incrementAndGet()
-            DeliveryResult.Republish()
-          }
-        }
-        .withResource { _ =>
-          rabbitConnection.newProducer[Bytes]("testing", Monitor.noOp()).withResource { sender =>
-            // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
-            rabbitConnection.declareQueue("declareQueue").await
-            rabbitConnection.bindQueue("bindQueue").await
-
-            for (n <- 1 to messagesCount) {
-              sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
-            }
-
-            eventually(timeout(Span(90, Seconds)), interval(Span(1, Seconds))) {
-              println(s"PROCESSED COUNT: ${processed.get()}")
-              assertResult(messagesCount * 2)(processed.get())
-              assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
-              assertResult(messagesCount)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
-            }
-          }
-        }
-    }
-  }
-
-  test("PoisonedMessageHandler with timeouting messages") {
-    val c = createConfig()
-    import c._
-
-    val messagesCount = (Random.nextInt(1000) + 1000) * 2 // 2-4k, even
-
-    println(s"Sending $messagesCount messages!")
-
-    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
-      val processed = new AtomicInteger(0)
-
-      rabbitConnection
-        .newConsumer[Bytes]("testingWithPoisonedMessageHandler", Monitor.noOp()) {
-          case Delivery.Ok(body, _, _) =>
-            val n = body.toStringUtf8.toInt
-
-            /* This basically means every second message should be timed-out. That will cause it to be republished.
-             * Thx to maxAttempts = 2, this will be done twice in a row, so the resulting numbers are:
-             *
-             *  - processed     = messagesCount * 1.5 (half of messages is "processed" twice)
-             *  - poisoned      = messagesCount / 2 (half of messages is "thrown away")
-             *  - rest in queue = 0
-             *
-             */
-
-            Task {
-              processed.incrementAndGet()
-            } >>
-              sleepIfEven(n, 800.millis) >> // timeout is 500 ms, this need to be quite much longer to be deterministic
-              Task.now(DeliveryResult.Ack)
-
-          case _ => fail()
-        }
-        .withResource { _ =>
-          rabbitConnection.newProducer[Bytes]("testing", Monitor.noOp()).withResource { sender =>
-            // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
-            rabbitConnection.declareQueue("declareQueue").await
-            rabbitConnection.bindQueue("bindQueue").await
-
-            for (n <- 1 to messagesCount) {
-              sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
-            }
-
-            eventually(timeout(Span(90, Seconds)), interval(Span(1, Seconds))) {
-              println(s"PROCESSED COUNT: ${processed.get()}")
-              assertResult(1.5 * messagesCount)(processed.get())
-              assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
-              assertResult(messagesCount / 2)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
-            }
-          }
-        }
-    }
-  }
-
-  test("PoisonedMessageHandler pull") {
-    val c = createConfig()
-    import c._
-
-    val messagesCount = Random.nextInt(2000) + 2000 // only 2-4k, this consumer is just slow
-
-    println(s"Sending $messagesCount messages!")
-
-    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
-      val processed = new AtomicInteger(0)
-
-      rabbitConnection.newPullConsumer[Bytes]("testingPullWithPoisonedMessageHandler", Monitor.noOp()).withResource { cons =>
-        rabbitConnection.newProducer[Bytes]("testing", Monitor.noOp()).withResource { sender =>
-          // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
-          rabbitConnection.declareQueue("declareQueue").await
-          rabbitConnection.bindQueue("bindQueue").await
-
-          for (n <- 1 to messagesCount) {
-            sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
-          }
-
-          // run async:
-          ex.execute(() => {
-            while (true) {
-              cons.pull().await match {
-                case PullResult.Ok(dwh) =>
-                  processed.incrementAndGet()
-                  dwh.handle(DeliveryResult.Republish()).await
-
-                case PullResult.EmptyQueue => // 🤷‍
-              }
-            }
-          })
-
-          eventually(timeout(Span(90, Seconds)), interval(Span(1, Seconds))) {
-            println(s"PROCESSED COUNT: ${processed.get()}")
-            assertResult(2 * messagesCount)(processed.get())
-            assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
-            assertResult(messagesCount)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
-          }
-        }
-      }
-    }
-  }
-
-  test("PoisonedMessageHandler streaming") {
-    val c = createConfig()
-    import c._
-
-    val messagesCount = Random.nextInt(5000) + 5000 // 5-10k
-
-    println(s"Sending $messagesCount messages!")
-
-    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
-      val processed = new AtomicInteger(0)
-
-      rabbitConnection.newStreamingConsumer[Bytes]("testingStreamingWithPoisonedMessageHandler", Monitor.noOp()).withResource { cons =>
-        cons.deliveryStream
-          .evalMap {
-            _.handleWith { _ =>
-              Task {
-                processed.incrementAndGet()
-                DeliveryResult.Republish()
-              }
-            }
-          }
-          .compile
-          .drain
-          .runToFuture
-
-        rabbitConnection.newProducer[Bytes]("testing", Monitor.noOp()).withResource { sender =>
-          // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
-          rabbitConnection.declareQueue("declareQueue").await
-          rabbitConnection.bindQueue("bindQueue").await
-
-          for (n <- 1 to messagesCount) {
-            sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
-          }
-
-          eventually(timeout(Span(30, Seconds)), interval(Span(1, Seconds))) {
-            println(s"PROCESSED COUNT: ${processed.get()}")
-            // we can't assert the `processed` here - some deliveries may have been cancelled before they were even executed
-            assertResult(0)(testHelper.queue.getMessagesCount(queueName1)) // original dest. queue
-            assertResult(messagesCount)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
-          }
-        }
-      }
-    }
-  }
-
-  test("PoisonedMessageHandler streaming with timeouting messages") {
-    val c = createConfig()
-    import c._
-
-    val monitor = new TestMonitor[Task]
-
-    val messagesCount = (Random.nextInt(2000) + 2000) * 2 // 4-8k, even
-
-    println(s"Sending $messagesCount messages!")
-
-    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
-      val processed = new AtomicInteger(0)
-
-      rabbitConnection.newStreamingConsumer[Bytes]("testingStreamingWithPoisonedMessageHandler", monitor).withResource { cons =>
-        cons.deliveryStream
-          .parEvalMapUnordered(200) {
-            _.handleWith {
-              case Delivery.Ok(body, _, _) =>
-                val n = body.toStringUtf8.toInt
-
-                /* This basically means every second message should be timed-out. That will cause it to be republished.
-                 * Thx to maxAttempts = 2, this will be done twice in a row, so the resulting numbers are:
-                 *
-                 *  - poisoned      = messagesCount / 2 (half of messages is "thrown away")
-                 *  - rest in queue = 0
-                 *
-                 */
-
-                Task {
-                  processed.incrementAndGet()
-                } >>
-                  sleepIfEven(n, 800.millis) >> // timeout is 500 ms, this need to be quite much longer to be deterministic
-                  Task.now(DeliveryResult.Ack)
-
-              case _ => fail()
-            }
-          }
-          .compile
-          .drain
-          .runToFuture
-
-        rabbitConnection.newProducer[Bytes]("testing", Monitor.noOp()).withResource { sender =>
-          // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
-          rabbitConnection.declareQueue("declareQueue").await
-          rabbitConnection.bindQueue("bindQueue").await
-
-          for (n <- 1 to messagesCount) {
-            sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
-          }
-
-          eventually(timeout(Span(120, Seconds)), interval(Span(1, Seconds))) {
-            println(s"PROCESSED COUNT: ${processed.get()}")
-            // we can't assert the `processed` here - some deliveries may have been cancelled before they were even executed
-            assertResult(0)(testHelper.queue.getMessagesCount(queueName1))
-            assertResult(messagesCount / 2)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
-          }
-        }
-      }
-    }
-  }
+//  test("PoisonedMessageHandler streaming with timeouting messages") {
+//    val c = createConfig()
+//    import c._
+//
+//    val monitor = new TestMonitor[Task]
+//
+//    val messagesCount = (Random.nextInt(2000) + 2000) * 2 // 4-8k, even
+//
+//    println(s"Sending $messagesCount messages!")
+//
+//    RabbitMQConnection.fromConfig[Task](config, ex).withResource { rabbitConnection =>
+//      val processed = new AtomicInteger(0)
+//
+//      rabbitConnection.newStreamingConsumer[Bytes]("testingStreamingWithPoisonedMessageHandler", monitor).withResource { cons =>
+//        cons.deliveryStream
+//          .parEvalMapUnordered(200) {
+//            _.handleWith {
+//              case Delivery.Ok(body, _, _) =>
+//                val n = body.toStringUtf8.toInt
+//
+//                /* This basically means every second message should be timed-out. That will cause it to be republished.
+//                 * Thx to maxAttempts = 2, this will be done twice in a row, so the resulting numbers are:
+//                 *
+//                 *  - poisoned      = messagesCount / 2 (half of messages is "thrown away")
+//                 *  - rest in queue = 0
+//                 *
+//                 */
+//
+//                Task {
+//                  processed.incrementAndGet()
+//                } >>
+//                  sleepIfEven(n, 800.millis) >> // timeout is 500 ms, this need to be quite much longer to be deterministic
+//                  Task.now(DeliveryResult.Ack)
+//
+//              case _ => fail()
+//            }
+//          }
+//          .compile
+//          .drain
+//          .runToFuture
+//
+//        rabbitConnection.newProducer[Bytes]("testing").withResource { sender =>
+//          // this need to be done _after_ the producer is created (it declares the exchange) but _before_ it starts send messages (so they are not lost)
+//          rabbitConnection.declareQueue("declareQueue").await
+//          rabbitConnection.bindQueue("bindQueue").await
+//
+//          for (n <- 1 to messagesCount) {
+//            sender.send(initialRoutingKey, Bytes.copyFromUtf8(n.toString), Some(MessageProperties(messageId = Some(s"msg_${n}_")))).await
+//          }
+//
+//          eventually(timeout(Span(120, Seconds)), interval(Span(1, Seconds))) {
+//            println(s"PROCESSED COUNT: ${processed.get()}")
+//            // we can't assert the `processed` here - some deliveries may have been cancelled before they were even executed
+//            assertResult(0)(testHelper.queue.getMessagesCount(queueName1))
+//            assertResult(messagesCount / 2)(testHelper.queue.getMessagesCount(queueName2)) // dead queue
+//          }
+//        }
+//      }
+//    }
+//  }
 
   private def sleepIfEven(n: Int, length: FiniteDuration): Task[Unit] = {
     if (n % 2 == 0) {

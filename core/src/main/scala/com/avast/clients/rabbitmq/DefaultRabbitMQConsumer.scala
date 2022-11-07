@@ -1,6 +1,7 @@
 package com.avast.clients.rabbitmq
 
 import cats.effect._
+import cats.effect.std.Dispatcher
 import cats.implicits._
 import com.avast.clients.rabbitmq.api._
 import com.rabbitmq.client.{Delivery => _}
@@ -8,7 +9,7 @@ import org.slf4j.event.Level
 
 import scala.concurrent.duration.FiniteDuration
 
-class DefaultRabbitMQConsumer[F[_]: ConcurrentEffect: Timer, A: DeliveryConverter](
+class DefaultRabbitMQConsumer[F[_] : Dispatcher : Async : Sync, A: DeliveryConverter](
     private[rabbitmq] val base: ConsumerBase[F, A],
     channelOps: ConsumerChannelOps[F, A],
     processTimeout: FiniteDuration,
@@ -24,9 +25,9 @@ class DefaultRabbitMQConsumer[F[_]: ConcurrentEffect: Timer, A: DeliveryConverte
     import d._
 
     // we try to catch also long-lasting synchronous work on the thread
-    val resultAction = blocker.delay { userAction(delivery).map(ConfirmedDeliveryResult(_)) }.flatten
+    val resultAction = Sync[F].delay { userAction(delivery).map(ConfirmedDeliveryResult(_)) }.flatten
 
-    watchForTimeoutIfConfigured(processTimeout, timeoutAction, timeoutLogLevel)(delivery, resultAction)(F.unit).map(Some(_))
+    watchForTimeoutIfConfigured(processTimeout, timeoutAction, timeoutLogLevel)(delivery, resultAction)(Sync[F].unit).map(Some(_))
   }
 
 }

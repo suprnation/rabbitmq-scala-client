@@ -4,20 +4,16 @@ import cats.effect._
 import cats.implicits._
 import com.avast.bytes.Bytes
 import com.avast.clients.rabbitmq.api._
-import com.avast.metrics.scalaeffectapi.SettableGauge
 
-import java.util.concurrent.atomic.AtomicInteger
-
-class DefaultRabbitMQPullConsumer[F[_]: ConcurrentEffect, A: DeliveryConverter](base: ConsumerBase[F, A],
-                                                                                channelOps: ConsumerChannelOps[F, A])
+class DefaultRabbitMQPullConsumer[F[_]: Sync, A: DeliveryConverter](base: ConsumerBase[F, A], channelOps: ConsumerChannelOps[F, A])
     extends RabbitMQPullConsumer[F, A] {
   import base._
   import channelOps._
 
-  protected val processingCount: SettableGauge[F, Long] = consumerRootMonitor.gauge.settableLong("processing", replaceExisting = true)
+//  protected val processingCount: SettableGauge[F, Long] = consumerRootMonitor.gauge.settableLong("processing", replaceExisting = true)
 
   override def pull(): F[PullResult[F, A]] = {
-    blocker
+    Sync[F]
       .delay {
         Option(channel.basicGet(queueName, false))
       }
@@ -25,13 +21,14 @@ class DefaultRabbitMQPullConsumer[F[_]: ConcurrentEffect, A: DeliveryConverter](
         case Some(response) =>
           val rawBody = Bytes.copyFrom(response.getBody)
 
-          (processingCount.inc >> parseDelivery(response.getEnvelope, rawBody, response.getProps)).flatMap { d =>
+//          processingCount.inc >>
+            (parseDelivery(response.getEnvelope, rawBody, response.getProps)).flatMap { d =>
             import d._
             import context._
 
             val dwh = createDeliveryWithHandle(delivery) { result =>
-              handleResult(rawBody, delivery)(result) >>
-                processingCount.dec.void
+              handleResult(rawBody, delivery)(result)
+              // >> processingCount.dec.void
             }
 
             consumerLogger.debug(s"[$consumerName] Read delivery with $messageId $deliveryTag").as {
@@ -40,7 +37,7 @@ class DefaultRabbitMQPullConsumer[F[_]: ConcurrentEffect, A: DeliveryConverter](
           }
 
         case None =>
-          Effect[F].pure {
+          Sync[F].pure {
             PullResult.EmptyQueue.asInstanceOf[PullResult[F, A]]
           }
       }

@@ -8,24 +8,26 @@ protobuf {
     }
 }
 
-dockerCompose.isRequiredBy(test)
+//dockerCompose.isRequiredBy(test)
 
-test.doFirst {
-    dockerCompose.exposeAsSystemProperties(test)
-}
+//test.doFirst {
+//    dockerCompose.exposeAsSystemProperties(test)
+//}
 
 dependencies {
     api project(":api")
 
-    api "com.avast.metrics:metrics-cats-effect-2_$scalaVersion:${metricsVersion}"
+//    api "com.avast.metrics:metrics-cats-effect-2_$scalaVersion:${metricsVersion}"
     api "org.typelevel:log4cats-slf4j_$scalaVersion:1.4.0"
 
     api "com.avast.bytes:bytes-core:${bytesVersion}"
 
-    api 'com.rabbitmq:amqp-client:5.15.0'
+    api 'com.rabbitmq:amqp-client:5.16.0'
 
     api "org.typelevel:cats-core_$scalaVersion:$catsVersion"
     api "org.typelevel:cats-effect_$scalaVersion:$catsEffectVersion"
+    api "org.typelevel:cats-effect-kernel_$scalaVersion:$catsEffectVersion"
+    api "org.typelevel:cats-effect-std_$scalaVersion:$catsEffectVersion"
 
     api 'org.xbib:jsr-305:1.0.0'
     api "org.scala-lang:scala-reflect:$scalaVersionFull"

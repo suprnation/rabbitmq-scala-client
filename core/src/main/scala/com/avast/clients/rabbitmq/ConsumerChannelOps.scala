@@ -1,35 +1,35 @@
 package com.avast.clients.rabbitmq
 
-import cats.effect.{Blocker, ConcurrentEffect, ContextShift, Resource, Timer}
+import cats.effect.{Resource, Sync}
 import cats.implicits.catsSyntaxApplicativeError
 import cats.syntax.flatMap._
 import com.avast.bytes.Bytes
 import com.avast.clients.rabbitmq.DefaultRabbitMQConsumer._
 import com.avast.clients.rabbitmq.api._
 import com.avast.clients.rabbitmq.logging.ImplicitContextLogger
-import com.avast.metrics.scalaeffectapi.Monitor
+//import com.avast.metrics.scalaeffectapi.Monitor
 import com.rabbitmq.client.AMQP.BasicProperties
 
 import scala.jdk.CollectionConverters._
 import scala.util._
 
 // it's case-class to have `copy` method for free....
-final private[rabbitmq] case class ConsumerChannelOps[F[_]: ConcurrentEffect: Timer: ContextShift, A](
+final private[rabbitmq] case class ConsumerChannelOps[F[_]: Sync, A](
     private val consumerName: String,
     private val queueName: String,
     channel: ServerChannel,
-    private val blocker: Blocker,
     republishStrategy: RepublishStrategy[F],
     poisonedMessageHandler: PoisonedMessageHandler[F, A],
     connectionInfo: RabbitMQConnectionInfo,
     private val consumerLogger: ImplicitContextLogger[F],
-    private val consumerRootMonitor: Monitor[F]) {
+//    private val consumerRootMonitor: Monitor[F]
+) {
 
-  val resultsMonitor: Monitor[F] = consumerRootMonitor.named("results")
-  private val resultAckMeter = resultsMonitor.meter("ack")
-  private val resultRejectMeter = resultsMonitor.meter("reject")
-  private val resultRetryMeter = resultsMonitor.meter("retry")
-  private val resultRepublishMeter = resultsMonitor.meter("republish")
+//  val resultsMonitor: Monitor[F] = consumerRootMonitor.named("results")
+//  private val resultAckMeter = resultsMonitor.meter("ack")
+//  private val resultRejectMeter = resultsMonitor.meter("reject")
+//  private val resultRetryMeter = resultsMonitor.meter("retry")
+//  private val resultRepublishMeter = resultsMonitor.meter("republish")
 
   def handleResult(rawBody: Bytes, delivery: Delivery[A])(res: DeliveryResult)(implicit dctx: DeliveryContext): F[Unit] = {
     import DeliveryResult._
@@ -48,14 +48,14 @@ final private[rabbitmq] case class ConsumerChannelOps[F[_]: ConcurrentEffect: Ti
     import dctx._
 
     consumerLogger.debug(s"[$consumerName] ACK delivery $messageId, $deliveryTag") >>
-      blocker
+      Sync[F]
         .delay {
           if (!channel.isOpen) throw new IllegalStateException("Cannot ack delivery on closed channel")
           channel.basicAck(deliveryTag.value, false)
         }
         .attempt
         .flatMap {
-          case Right(()) => resultAckMeter.mark
+          case Right(()) => Sync[F].unit  //  resultAckMeter.mark
           case Left(e) => consumerLogger.warn(e)(s"[$consumerName] Error while confirming the delivery $messageId")
         }
   }
@@ -64,14 +64,14 @@ final private[rabbitmq] case class ConsumerChannelOps[F[_]: ConcurrentEffect: Ti
     import dctx._
 
     consumerLogger.debug(s"[$consumerName] REJECT delivery $messageId, $deliveryTag") >>
-      blocker
+      Sync[F]
         .delay {
           if (!channel.isOpen) throw new IllegalStateException("Cannot reject delivery on closed channel")
           channel.basicReject(deliveryTag.value, false)
         }
         .attempt
         .flatMap {
-          case Right(()) => resultRejectMeter.mark
+          case Right(()) => Sync[F].unit // resultRejectMeter.mark
           case Left(e) => consumerLogger.warn(e)(s"[$consumerName] Error while rejecting the delivery $messageId")
         }
   }
@@ -80,22 +80,22 @@ final private[rabbitmq] case class ConsumerChannelOps[F[_]: ConcurrentEffect: Ti
     import dctx._
 
     consumerLogger.debug(s"[$consumerName] REJECT (with requeue) delivery $messageId, $deliveryTag") >>
-      blocker
+      Sync[F]
         .delay {
           if (!channel.isOpen) throw new IllegalStateException("Cannot retry delivery on closed channel")
           channel.basicReject(deliveryTag.value, true)
         }
         .attempt
         .flatMap {
-          case Right(()) => resultRetryMeter.mark
+          case Right(()) => Sync[F].unit // resultRetryMeter.mark
           case Left(e) => consumerLogger.warn(e)(s"[$consumerName] Error while rejecting (with requeue) the delivery $messageId")
         }
   }
 
   protected def republish(properties: BasicProperties, rawBody: Bytes)(implicit dctx: DeliveryContext): F[Unit] = {
 
-    republishStrategy.republish(blocker, channel, consumerName)(queueName, properties, rawBody) >>
-      resultRepublishMeter.mark
+    republishStrategy.republish(channel, consumerName)(queueName, properties, rawBody)
+//     >> resultRepublishMeter.mark
   }
 
   protected def createPropertiesForRepublish(newHeaders: Map[String, AnyRef],
@@ -117,15 +117,14 @@ final private[rabbitmq] case class ConsumerChannelOps[F[_]: ConcurrentEffect: Ti
   }
 }
 
-class ConsumerChannelOpsFactory[F[_]: ConcurrentEffect: Timer: ContextShift, A: DeliveryConverter](
+class ConsumerChannelOpsFactory[F[_] : Sync, A: DeliveryConverter](
     consumerName: String,
     queueName: String,
-    blocker: Blocker,
     republishStrategy: RepublishStrategy[F],
     poisonedMessageHandler: PoisonedMessageHandler[F, A],
     connectionInfo: RabbitMQConnectionInfo,
     consumerLogger: ImplicitContextLogger[F],
-    consumerRootMonitor: Monitor[F],
+//    consumerRootMonitor: Monitor[F],
     newChannel: Resource[F, ServerChannel]) {
 
   val create: Resource[F, ConsumerChannelOps[F, A]] = {
@@ -133,12 +132,12 @@ class ConsumerChannelOpsFactory[F[_]: ConcurrentEffect: Timer: ContextShift, A: 
       new ConsumerChannelOps[F, A](consumerName,
                                    queueName,
                                    channel,
-                                   blocker,
                                    republishStrategy,
                                    poisonedMessageHandler,
                                    connectionInfo,
                                    consumerLogger,
-                                   consumerRootMonitor)
+                                  // consumerRootMonitor
+      )
     }
   }
 }

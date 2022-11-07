@@ -1,10 +1,11 @@
 package com.avast.clients.rabbitmq
 
-import cats.effect.{ConcurrentEffect, Timer => CatsTimer}
+import cats.effect.Sync
+import cats.effect.std.Dispatcher
 import cats.syntax.all._
 import com.avast.bytes.Bytes
 import com.avast.clients.rabbitmq.api.DeliveryResult
-import com.avast.metrics.scalaeffectapi._
+//import com.avast.metrics.scalaeffectapi._
 import com.rabbitmq.client.AMQP.BasicProperties
 import com.rabbitmq.client._
 
@@ -12,23 +13,23 @@ import java.time.{Duration, Instant}
 import java.util.concurrent.RejectedExecutionException
 import scala.util.control.NonFatal
 
-abstract class ConsumerWithCallbackBase[F[_]: ConcurrentEffect: CatsTimer, A: DeliveryConverter](base: ConsumerBase[F, A],
-                                                                                                 channelOps: ConsumerChannelOps[F, A],
-                                                                                                 failureAction: DeliveryResult,
-                                                                                                 consumerListener: ConsumerListener[F])
+abstract class ConsumerWithCallbackBase[F[_]: Sync : Dispatcher, A: DeliveryConverter](base: ConsumerBase[F, A],
+                                                                                       channelOps: ConsumerChannelOps[F, A],
+                                                                                       failureAction: DeliveryResult,
+                                                                                       consumerListener: ConsumerListener[F])
     extends DefaultConsumer(channelOps.channel) {
   import base._
   import channelOps._
 
-  protected val readMeter: Meter[F] = consumerRootMonitor.meter("read")
+//  protected val readMeter: Meter[F] = consumerRootMonitor.meter("read")
 
-  protected val processingFailedMeter: Meter[F] = resultsMonitor.meter("processingFailed")
+//  protected val processingFailedMeter: Meter[F] = resultsMonitor.meter("processingFailed")
 
-  protected val tasksMonitor: Monitor[F] = consumerRootMonitor.named("tasks")
+//  protected val tasksMonitor: Monitor[F] = consumerRootMonitor.named("tasks")
 
-  protected val processingCount: SettableGauge[F, Long] = tasksMonitor.gauge.settableLong("processing", replaceExisting = true)
+//  protected val processingCount: SettableGauge[F, Long] = tasksMonitor.gauge.settableLong("processing", replaceExisting = true)
 
-  protected val processedTimer: TimerPair[F] = tasksMonitor.timerPair("processed")
+//  protected val processedTimer: TimerPair[F] = tasksMonitor.timerPair("processed")
 
   override def handleShutdownSignal(consumerTag: String, sig: ShutdownSignalException): Unit = {
     consumerListener.onShutdown(this, channel, consumerName, consumerTag, sig).unsafeStartAndForget()
@@ -37,7 +38,8 @@ abstract class ConsumerWithCallbackBase[F[_]: ConcurrentEffect: CatsTimer, A: De
   protected def handleNewDelivery(d: DeliveryWithContext[A]): F[Option[ConfirmedDeliveryResult[F]]]
 
   override final def handleDelivery(consumerTag: String, envelope: Envelope, properties: BasicProperties, body: Array[Byte]): Unit = {
-    val action = processingCount.inc >> {
+    // val action = processingCount.inc >>  {
+    val action = {
       val rawBody = Bytes.copyFrom(body)
 
       base
@@ -48,10 +50,11 @@ abstract class ConsumerWithCallbackBase[F[_]: ConcurrentEffect: CatsTimer, A: De
 
           consumerLogger.debug(s"[$consumerName] Read delivery with $messageId, $deliveryTag") >>
             consumerLogger.trace(s"[$consumerName] Received delivery: ${d.delivery}") >>
-            readMeter.mark >> {
+//            readMeter.mark >>
+            {
 
             val st = Instant.now()
-            val taskDuration = F.delay(Duration.between(st, Instant.now()))
+            val taskDuration = Sync[F].delay(Duration.between(st, Instant.now()))
 
             unsafeExecuteReadAction(d, rawBody, taskDuration)
               .recoverWith {
@@ -63,10 +66,10 @@ abstract class ConsumerWithCallbackBase[F[_]: ConcurrentEffect: CatsTimer, A: De
         }
         .recoverWith {
           case e =>
-            processingCount.dec >>
-              processingFailedMeter.mark >>
+//            processingCount.dec >>
+//              processingFailedMeter.mark >>
               consumerLogger.plainDebug(e)(s"Could not process delivery with delivery tag ${envelope.getDeliveryTag}") >>
-              F.raiseError[Unit](e)
+              Sync[F].raiseError[Unit](e)
         }
     }
 
@@ -90,24 +93,25 @@ abstract class ConsumerWithCallbackBase[F[_]: ConcurrentEffect: CatsTimer, A: De
       }
       .flatTap { _ =>
         taskDuration.flatMap { duration =>
-          consumerLogger.debug(s"[$consumerName] Delivery $messageId handling succeeded in $duration") >>
-            processedTimer.update(duration) >>
-            processingCount.dec
+          consumerLogger.debug(s"[$consumerName] Delivery $messageId handling succeeded in $duration")
+//          >>
+//            processedTimer.update(duration) >>
+//            processingCount.dec
         }
       }
       .recoverWith {
         case NonFatal(t) =>
           taskDuration.flatMap { duration =>
             consumerLogger.debug(t)(s"[$consumerName] Delivery $messageId handling failed in $duration") >>
-              processedTimer.updateFailure(duration) >>
+//              processedTimer.updateFailure(duration) >>
               handleFailure(delivery, rawBody, t)
           }
       }
   }
 
   private def handleFailure(delivery: DeliveryWithContext[A], rawBody: Bytes, t: Throwable)(implicit dctx: DeliveryContext): F[Unit] = {
-    processingFailedMeter.mark >>
-      processingCount.dec >>
+//    processingFailedMeter.mark >>
+//      processingCount.dec >>
       consumerListener.onError(this, consumerName, channel, t) >>
       executeFailureAction(delivery, rawBody)
   }

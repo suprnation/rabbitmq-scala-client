@@ -2,27 +2,10 @@ package com.avast.clients.rabbitmq.pureconfig
 
 import _root_.pureconfig._
 import _root_.pureconfig.error.ConfigReaderException
-import cats.effect.{ConcurrentEffect, Resource}
+import cats.effect.{Resource, Sync}
+import cats.implicits._
 import com.avast.clients.rabbitmq.api._
-import com.avast.clients.rabbitmq.{
-  BindExchangeConfig,
-  BindQueueConfig,
-  ChannelListener,
-  ConnectionListener,
-  ConsumerConfig,
-  ConsumerListener,
-  DeclareExchangeConfig,
-  DeclareQueueConfig,
-  DeliveryConverter,
-  DeliveryReadAction,
-  ProducerConfig,
-  ProductConverter,
-  PullConsumerConfig,
-  RabbitMQConnection,
-  ServerChannel,
-  StreamingConsumerConfig
-}
-import com.avast.metrics.scalaeffectapi.Monitor
+import com.avast.clients.rabbitmq.{BindExchangeConfig, BindQueueConfig, ChannelListener, ConnectionListener, ConsumerConfig, ConsumerListener, DeclareExchangeConfig, DeclareQueueConfig, DeliveryConverter, DeliveryReadAction, ProducerConfig, ProductConverter, PullConsumerConfig, RabbitMQConnection, ServerChannel, StreamingConsumerConfig}
 
 import scala.reflect.ClassTag
 
@@ -33,32 +16,27 @@ trait ConfigRabbitMQConnection[F[_]] {
   /** Creates new instance of consumer, using the TypeSafe configuration passed to the factory and consumer name.
     *
     * @param configName Name of configuration of the consumer.
-    * @param monitor    Monitor[F] for metrics.
     * @param readAction Action executed for each delivered message. You should never return a failed F.
     */
-  def newConsumer[A: DeliveryConverter](configName: String, monitor: Monitor[F])(
-      readAction: DeliveryReadAction[F, A]): Resource[F, RabbitMQConsumer[F]]
+  def newConsumer[A: DeliveryConverter](configName: String)(readAction: DeliveryReadAction[F, A]): Resource[F, RabbitMQConsumer[F]]
 
   /** Creates new instance of producer, using the TypeSafe configuration passed to the factory and producer name.
     *
     * @param configName Name of configuration of the producer.
-    * @param monitor    Monitor[F] for metrics.
     */
-  def newProducer[A: ProductConverter](configName: String, monitor: Monitor[F]): Resource[F, RabbitMQProducer[F, A]]
+  def newProducer[A: ProductConverter](configName: String): Resource[F, RabbitMQProducer[F, A]]
 
   /** Creates new instance of pull consumer, using the TypeSafe configuration passed to the factory and consumer name.
     *
     * @param configName Name of configuration of the consumer.
-    * @param monitor    Monitor[F] for metrics.
     */
-  def newPullConsumer[A: DeliveryConverter](configName: String, monitor: Monitor[F]): Resource[F, RabbitMQPullConsumer[F, A]]
+  def newPullConsumer[A: DeliveryConverter](configName: String): Resource[F, RabbitMQPullConsumer[F, A]]
 
   /** Creates new instance of streaming consumer, using the TypeSafe configuration passed to the factory and consumer name.
     *
     * @param configName Name of configuration of the consumer.
-    * @param monitor    Monitor[F] for metrics.
     */
-  def newStreamingConsumer[A: DeliveryConverter](configName: String, monitor: Monitor[F]): Resource[F, RabbitMQStreamingConsumer[F, A]]
+  def newStreamingConsumer[A: DeliveryConverter](configName: String): Resource[F, RabbitMQStreamingConsumer[F, A]]
 
   /**
     * Declares and additional exchange, using the TypeSafe configuration passed to the factory and config name.
@@ -94,9 +72,8 @@ trait ConfigRabbitMQConnection[F[_]] {
   def consumerListener: ConsumerListener[F]
 }
 
-class DefaultConfigRabbitMQConnection[F[_]](config: ConfigCursor, wrapped: RabbitMQConnection[F])(
-    implicit F: ConcurrentEffect[F],
-    consumerConfigReader: ConfigReader[ConsumerConfig],
+class DefaultConfigRabbitMQConnection[F[_]: Sync](config: ConfigCursor, wrapped: RabbitMQConnection[F])(
+    implicit consumerConfigReader: ConfigReader[ConsumerConfig],
     producerConfigReader: ConfigReader[ProducerConfig],
     pullConsumerConfigReader: ConfigReader[PullConsumerConfig],
     streamingConsumerConfigReader: ConfigReader[StreamingConsumerConfig],
@@ -105,7 +82,6 @@ class DefaultConfigRabbitMQConnection[F[_]](config: ConfigCursor, wrapped: Rabbi
     bindQueueConfigReader: ConfigReader[BindQueueConfig],
     bindExchangeConfigReader: ConfigReader[BindExchangeConfig]
 ) extends ConfigRabbitMQConnection[F] {
-  import cats.syntax.flatMap._
 
   override def newChannel(): Resource[F, ServerChannel] = wrapped.newChannel()
 
@@ -117,42 +93,42 @@ class DefaultConfigRabbitMQConnection[F[_]](config: ConfigCursor, wrapped: Rabbi
 
   override val consumerListener: ConsumerListener[F] = wrapped.consumerListener
 
-  override def newConsumer[A: DeliveryConverter](configName: String, monitor: Monitor[F])(
+  override def newConsumer[A: DeliveryConverter](configName: String)(
       readAction: DeliveryReadAction[F, A]): Resource[F, RabbitMQConsumer[F]] = {
-    Resource.eval(loadConfig[ConsumerConfig](ConsumersRootName, configName)) >>= (wrapped.newConsumer(_, monitor)(readAction))
+    Resource.eval(loadConfig[ConsumerConfig](ConsumersRootName, configName)) >>= (wrapped
+      .newConsumer(_)(readAction))
   }
 
-  override def newProducer[A: ProductConverter](configName: String, monitor: Monitor[F]): Resource[F, RabbitMQProducer[F, A]] = {
-    Resource.eval(loadConfig[ProducerConfig](ProducersRootName, configName)) >>= (wrapped.newProducer(_, monitor))
+  override def newProducer[A: ProductConverter](configName: String): Resource[F, RabbitMQProducer[F, A]] = {
+    Resource.eval(loadConfig[ProducerConfig](ProducersRootName, configName)) >>= (wrapped.newProducer(_))
   }
 
-  override def newPullConsumer[A: DeliveryConverter](configName: String, monitor: Monitor[F]): Resource[F, RabbitMQPullConsumer[F, A]] = {
-    Resource.eval(loadConfig[PullConsumerConfig](ConsumersRootName, configName)) >>= (wrapped.newPullConsumer(_, monitor))
+  override def newPullConsumer[A: DeliveryConverter](configName: String): Resource[F, RabbitMQPullConsumer[F, A]] = {
+    Resource.eval(loadConfig[PullConsumerConfig](ConsumersRootName, configName)) >>= (wrapped.newPullConsumer(_))
   }
 
-  override def newStreamingConsumer[A: DeliveryConverter](configName: String,
-                                                          monitor: Monitor[F]): Resource[F, RabbitMQStreamingConsumer[F, A]] = {
-    Resource.eval(loadConfig[StreamingConsumerConfig](ConsumersRootName, configName)) >>= (wrapped.newStreamingConsumer(_, monitor))
+  override def newStreamingConsumer[A: DeliveryConverter](configName: String): Resource[F, RabbitMQStreamingConsumer[F, A]] = {
+    Resource.eval(loadConfig[StreamingConsumerConfig](ConsumersRootName, configName)) >>= (wrapped.newStreamingConsumer(_))
   }
 
   override def declareExchange(configName: String): F[Unit] = {
-    loadConfig[DeclareExchangeConfig](DeclarationsRootName, configName) >>= wrapped.declareExchange
+    loadConfig[DeclareExchangeConfig](DeclarationsRootName, configName) >>= (wrapped.declareExchange _)
   }
 
   override def declareQueue(configName: String): F[Unit] = {
-    loadConfig[DeclareQueueConfig](DeclarationsRootName, configName) >>= wrapped.declareQueue
+    loadConfig[DeclareQueueConfig](DeclarationsRootName, configName) >>= (wrapped.declareQueue _)
   }
 
   override def bindQueue(configName: String): F[Unit] = {
-    loadConfig[BindQueueConfig](DeclarationsRootName, configName) >>= wrapped.bindQueue
+    loadConfig[BindQueueConfig](DeclarationsRootName, configName) >>= (wrapped.bindQueue _)
   }
 
   override def bindExchange(configName: String): F[Unit] = {
-    loadConfig[BindExchangeConfig](DeclarationsRootName, configName) >>= wrapped.bindExchange
+    loadConfig[BindExchangeConfig](DeclarationsRootName, configName) >>= (wrapped.bindExchange _)
   }
 
   private def loadConfig[C](section: String, name: String)(implicit ct: ClassTag[C], reader: ConfigReader[C]): F[C] = {
-    F.delay {
+    Sync[F].delay {
       val segments: Seq[PathSegment.Key] = (section +: name.split('.').toSeq).map(PathSegment.Key)
 
       config.fluent

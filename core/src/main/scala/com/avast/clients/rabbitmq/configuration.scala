@@ -1,6 +1,6 @@
 package com.avast.clients.rabbitmq
 
-import cats.effect.{ContextShift, Sync}
+import cats.effect.Sync
 import com.avast.clients.rabbitmq.api.DeliveryResult
 import com.rabbitmq.client.RecoveryDelayHandler
 import org.slf4j.event.Level
@@ -125,8 +125,11 @@ final case class DeadQueueProducerConfig(name: String,
                                          properties: ProducerPropertiesConfig = ProducerPropertiesConfig())
 
 case object NoOpPoisonedMessageHandling extends PoisonedMessageHandlingConfig
-final case class LoggingPoisonedMessageHandling(maxAttempts: Int, republishDelay: Option[ExponentialDelay] = None) extends PoisonedMessageHandlingConfig
-final case class DeadQueuePoisonedMessageHandling(maxAttempts: Int, deadQueueProducer: DeadQueueProducerConfig, republishDelay: Option[ExponentialDelay] = None)
+final case class LoggingPoisonedMessageHandling(maxAttempts: Int, republishDelay: Option[ExponentialDelay] = None)
+    extends PoisonedMessageHandlingConfig
+final case class DeadQueuePoisonedMessageHandling(maxAttempts: Int,
+                                                  deadQueueProducer: DeadQueueProducerConfig,
+                                                  republishDelay: Option[ExponentialDelay] = None)
     extends PoisonedMessageHandlingConfig
 
 sealed trait AddressResolverType
@@ -157,16 +160,16 @@ object ExchangeType {
 }
 
 trait RepublishStrategyConfig {
-  def toRepublishStrategy[F[_]: Sync: ContextShift]: RepublishStrategy[F]
+  def toRepublishStrategy[F[_]: Sync]: RepublishStrategy[F]
 }
 
 object RepublishStrategyConfig {
   case class CustomExchange(exchangeName: String, exchangeDeclare: Boolean = true, exchangeAutoBind: Boolean = true)
       extends RepublishStrategyConfig {
-    override def toRepublishStrategy[F[_]: Sync: ContextShift]: RepublishStrategy[F] = RepublishStrategy.CustomExchange(exchangeName)
+    override def toRepublishStrategy[F[_]: Sync]: RepublishStrategy[F] = RepublishStrategy.CustomExchange(exchangeName)
   }
 
   case object DefaultExchange extends RepublishStrategyConfig {
-    override def toRepublishStrategy[F[_]: Sync: ContextShift]: RepublishStrategy[F] = RepublishStrategy.DefaultExchange[F]()
+    override def toRepublishStrategy[F[_]: Sync]: RepublishStrategy[F] = RepublishStrategy.DefaultExchange[F]()
   }
 }

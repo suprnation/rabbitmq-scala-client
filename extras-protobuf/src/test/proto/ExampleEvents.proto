@@ -1,8 +1,0 @@
-syntax = "proto3";
-
-package com.avast.clients.rabbitmq.test;
-
-message FileSource {
-    string file_id = 1;
-    string source = 2;
-}

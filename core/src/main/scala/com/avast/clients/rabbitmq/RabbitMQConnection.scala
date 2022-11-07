@@ -1,11 +1,11 @@
 package com.avast.clients.rabbitmq
 
 import cats.effect._
+import cats.effect.std.Dispatcher
 import cats.implicits.{catsSyntaxApplicativeError, catsSyntaxFlatMapOps, toFlatMapOps}
 import cats.syntax.functor._
 import com.avast.clients.rabbitmq.api._
 import com.avast.clients.rabbitmq.logging.ImplicitContextLogger
-import com.avast.metrics.scalaeffectapi.Monitor
 import com.rabbitmq.client._
 
 import java.io.IOException
@@ -24,34 +24,27 @@ trait RabbitMQConnection[F[_]] {
   /** Creates new instance of consumer, using the passed configuration.
     *
     * @param consumerConfig Configuration of the consumer.
-    * @param monitor    Monitor[F] for metrics.
     * @param readAction Action executed for each delivered message. You should never return a failed F.
     */
-  def newConsumer[A: DeliveryConverter](consumerConfig: ConsumerConfig, monitor: Monitor[F])(
+  def newConsumer[A: DeliveryConverter](consumerConfig: ConsumerConfig)(
       readAction: DeliveryReadAction[F, A]): Resource[F, RabbitMQConsumer[F]]
 
   /** Creates new instance of producer, using the passed configuration.
     *
     * @param producerConfig Configuration of the producer.
-    * @param monitor    Monitor[F] for metrics.
     */
-  def newProducer[A: ProductConverter](producerConfig: ProducerConfig, monitor: Monitor[F]): Resource[F, RabbitMQProducer[F, A]]
-
+  def newProducer[A: ProductConverter](producerConfig: ProducerConfig): Resource[F, RabbitMQProducer[F, A]]
   /** Creates new instance of pull consumer, using the passed configuration.
     *
     * @param pullConsumerConfig Configuration of the consumer.
-    * @param monitor    Monitor[F] for metrics.
     */
-  def newPullConsumer[A: DeliveryConverter](pullConsumerConfig: PullConsumerConfig,
-                                            monitor: Monitor[F]): Resource[F, RabbitMQPullConsumer[F, A]]
+  def newPullConsumer[A: DeliveryConverter](pullConsumerConfig: PullConsumerConfig): Resource[F, RabbitMQPullConsumer[F, A]]
 
   /** Creates new instance of streaming consumer, using the passed configuration.
     *
     * @param consumerConfig Configuration of the consumer.
-    * @param monitor Monitor[F] for metrics.
     */
-  def newStreamingConsumer[A: DeliveryConverter](consumerConfig: StreamingConsumerConfig,
-                                                 monitor: Monitor[F]): Resource[F, RabbitMQStreamingConsumer[F, A]]
+  def newStreamingConsumer[A: DeliveryConverter](consumerConfig: StreamingConsumerConfig): Resource[F, RabbitMQStreamingConsumer[F, A]]
 
   def declareExchange(config: DeclareExchangeConfig): F[Unit]
   def declareQueue(config: DeclareQueueConfig): F[Unit]
@@ -78,7 +71,7 @@ object RabbitMQConnection {
     def defaultConsumerListener[F[_]: Sync]: ConsumerListener[F] = ConsumerListener.default[F]
   }
 
-  def make[F[_]: ConcurrentEffect: Timer: ContextShift](
+  def make[F[_]: Async : Sync : Dispatcher: Temporal](
       connectionConfig: RabbitMQConnectionConfig,
       blockingExecutor: ExecutorService,
       sslContext: Option[SSLContext] = None,
@@ -86,7 +79,6 @@ object RabbitMQConnection {
       channelListener: Option[ChannelListener[F]] = None,
       consumerListener: Option[ConsumerListener[F]] = None): Resource[F, RabbitMQConnection[F]] = {
     val logger = ImplicitContextLogger.createLogger[F, RabbitMQConnection.type]
-    val blocker = Blocker.liftExecutorService(blockingExecutor)
 
     val connectionInfo = RabbitMQConnectionInfo(
       hosts = connectionConfig.hosts.toVector,
@@ -100,7 +92,6 @@ object RabbitMQConnection {
 
     createConnection(connectionConfig,
                      blockingExecutor,
-                     blocker,
                      sslContext,
                      finalConnectionListener,
                      finalChannelListener,
@@ -114,16 +105,14 @@ object RabbitMQConnection {
             connectionListener = finalConnectionListener,
             channelListener = finalChannelListener,
             consumerListener = finalConsumerListener,
-            blocker = blocker,
             republishStrategy = connectionConfig.republishStrategy
           )
           .map(identity[RabbitMQConnection[F]]) // sad story about type inference
       }
   }
 
-  protected def createConnection[F[_]: Effect: ContextShift](connectionConfig: RabbitMQConnectionConfig,
+  protected def createConnection[F[_]: Dispatcher : Sync](connectionConfig: RabbitMQConnectionConfig,
                                                              executor: ExecutorService,
-                                                             blocker: Blocker,
                                                              sslContext: Option[SSLContext],
                                                              connectionListener: ConnectionListener[F],
                                                              channelListener: ChannelListener[F],
@@ -135,10 +124,10 @@ object RabbitMQConnection {
     val exceptionHandler = createExceptionHandler[F](connectionListener, channelListener, consumerListener)
 
     Resource.make {
-      setUpConnection(connectionConfig, factory, exceptionHandler, sslContext, executor, blocker) >>
+      setUpConnection(connectionConfig, factory, exceptionHandler, sslContext, executor) >>
         parseAddresses(hosts) >>= { addresses =>
         logger.plainInfo(s"Connecting to ${hosts.mkString("[", ", ", "]")}, virtual host '$virtualHost'") >> {
-          blocker
+          Sync[F]
             .delay(factory.newConnection(addresses.toArray, name))
             .flatMap {
               case conn: ServerConnection =>
@@ -159,7 +148,7 @@ object RabbitMQConnection {
     }(c => Sync[F].delay(c.close()))
   }
 
-  private def parseAddresses[F[_]: Effect](hosts: immutable.Seq[String]): F[Seq[Address]] = {
+  private def parseAddresses[F[_]: Sync](hosts: immutable.Seq[String]): F[Seq[Address]] = {
     Sync[F].delay {
       try {
         hosts.map(Address.parseAddress)
@@ -184,12 +173,11 @@ object RabbitMQConnection {
     }
   }
 
-  private def setUpConnection[F[_]: Sync: ContextShift](connectionConfig: RabbitMQConnectionConfig,
+  private def setUpConnection[F[_]: Sync](connectionConfig: RabbitMQConnectionConfig,
                                                         factory: ConnectionFactory,
                                                         exceptionHandler: ExceptionHandler,
                                                         sslContext: Option[SSLContext],
-                                                        executor: ExecutorService,
-                                                        blocker: Blocker): F[Unit] = blocker.delay {
+                                                        executor: ExecutorService): F[Unit] = Sync[F].delay {
     import connectionConfig._
 
     factory.setVirtualHost(virtualHost)
@@ -219,7 +207,7 @@ object RabbitMQConnection {
   }
 
   // scalastyle:off
-  private def createExceptionHandler[F[_]: Effect](connectionListener: ConnectionListener[F],
+  private def createExceptionHandler[F[_]: Sync: Dispatcher](connectionListener: ConnectionListener[F],
                                                    channelListener: ChannelListener[F],
                                                    consumerListener: ConsumerListener[F]): ExceptionHandler with RecoveryListener =
     new ExceptionHandler with RecoveryListener {

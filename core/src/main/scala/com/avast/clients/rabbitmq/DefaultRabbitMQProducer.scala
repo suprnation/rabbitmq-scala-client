@@ -1,33 +1,31 @@
 package com.avast.clients.rabbitmq
 
-import cats.effect.{Blocker, ContextShift, Effect, Sync}
-import cats.implicits.{catsSyntaxApplicativeError, catsSyntaxFlatMapOps, toFlatMapOps}
+import cats.effect.Sync
+import cats.effect.std.Dispatcher
+import cats.implicits._
 import com.avast.bytes.Bytes
 import com.avast.clients.rabbitmq.JavaConverters._
 import com.avast.clients.rabbitmq.api.CorrelationIdStrategy.FromPropertiesOrRandomNew
 import com.avast.clients.rabbitmq.api._
 import com.avast.clients.rabbitmq.logging.ImplicitContextLogger
-import com.avast.metrics.scalaeffectapi.Monitor
 import com.rabbitmq.client.AMQP.BasicProperties
 import com.rabbitmq.client.{AlreadyClosedException, ReturnListener}
 
 import java.util.UUID
 import scala.util.control.NonFatal
 
-class DefaultRabbitMQProducer[F[_], A: ProductConverter](name: String,
-                                                         exchangeName: String,
-                                                         channel: ServerChannel,
-                                                         defaultProperties: MessageProperties,
-                                                         reportUnroutable: Boolean,
-                                                         sizeLimitBytes: Option[Int],
-                                                         blocker: Blocker,
-                                                         logger: ImplicitContextLogger[F],
-                                                         monitor: Monitor[F])(implicit F: Effect[F], cs: ContextShift[F])
+class DefaultRabbitMQProducer[F[_]: Dispatcher: Sync, A: ProductConverter](name: String,
+                                                                           exchangeName: String,
+                                                                           channel: ServerChannel,
+                                                                           defaultProperties: MessageProperties,
+                                                                           reportUnroutable: Boolean,
+                                                                           sizeLimitBytes: Option[Int],
+                                                                           logger: ImplicitContextLogger[F])
     extends RabbitMQProducer[F, A] {
 
-  private val sentMeter = monitor.meter("sent")
-  private val sentFailedMeter = monitor.meter("sentFailed")
-  private val unroutableMeter = monitor.meter("unroutable")
+//  private val sentMeter = monitor.meter("sent")
+//  private val sentFailedMeter = monitor.meter("sentFailed")
+//  private val unroutableMeter = monitor.meter("unroutable")
 
   private val converter = implicitly[ProductConverter[A]]
 
@@ -57,24 +55,24 @@ class DefaultRabbitMQProducer[F[_], A: ProductConverter](name: String,
   private def send(routingKey: String, body: Bytes, properties: MessageProperties)(implicit correlationId: CorrelationId): F[Unit] = {
     checkSize(body, routingKey) >>
       logger.debug(s"Sending message with ${body.size()} B to exchange $exchangeName with routing key '$routingKey' and $properties") >>
-      blocker
+      Sync[F]
         .delay {
           sendLock.synchronized {
             // see https://www.rabbitmq.com/api-guide.html#channel-threads
             channel.basicPublish(exchangeName, routingKey, properties.asAMQP, body.toByteArray)
           }
         }
-        .flatTap(_ => sentMeter.mark)
+//        .flatTap(_ => sentMeter.mark)
         .recoverWith {
           case ce: AlreadyClosedException =>
             logger.debug(ce)(s"[$name] Failed to send message with routing key '$routingKey' to exchange '$exchangeName'") >>
-              sentFailedMeter.mark >>
-              F.raiseError[Unit](ChannelNotRecoveredException("Channel closed, wait for recovery", ce))
+//              sentFailedMeter.mark >>
+              Sync[F].raiseError[Unit](ChannelNotRecoveredException("Channel closed, wait for recovery", ce))
 
           case NonFatal(e) =>
             logger.debug(e)(s"[$name] Failed to send message with routing key '$routingKey' to exchange '$exchangeName'") >>
-              sentFailedMeter.mark >>
-              F.raiseError[Unit](e)
+//              sentFailedMeter.mark >>
+              Sync[F].raiseError[Unit](e)
         }
   }
 
@@ -85,10 +83,10 @@ class DefaultRabbitMQProducer[F[_], A: ProductConverter](name: String,
         if (size >= limit) {
           logger.warn {
             s"[$name] Will not send message with $size B to exchange $exchangeName with routing key '$routingKey' as it is over the limit $limit B"
-          } >> F.raiseError[Unit](TooBigMessage(s"Message too big ($size/$limit)"))
-        } else F.unit
+          } >> Sync[F].raiseError[Unit](TooBigMessage(s"Message too big ($size/$limit)"))
+        } else Sync[F].unit
 
-      case None => F.unit
+      case None => Sync[F].unit
     }
   }
 
@@ -101,10 +99,10 @@ class DefaultRabbitMQProducer[F[_], A: ProductConverter](name: String,
                               properties: BasicProperties,
                               body: Array[Byte]): Unit = {
       startAndForget {
-        unroutableMeter.mark >>
-          logger.plainWarn(
-            s"[$name] Message sent with routingKey '$routingKey' to exchange '$exchange' (message ID '${properties.getMessageId}', body size ${body.length} B) is unroutable ($replyCode: $replyText)"
-          )
+//        unroutableMeter.mark >>
+        logger.plainWarn(
+          s"[$name] Message sent with routingKey '$routingKey' to exchange '$exchange' (message ID '${properties.getMessageId}', body size ${body.length} B) is unroutable ($replyCode: $replyText)"
+        )
       }
     }
   }
@@ -117,7 +115,8 @@ class DefaultRabbitMQProducer[F[_], A: ProductConverter](name: String,
                               properties: BasicProperties,
                               body: Array[Byte]): Unit = {
       startAndForget {
-        unroutableMeter.mark
+        Sync[F].unit
+//        unroutableMeter.mark
       }
     }
   }

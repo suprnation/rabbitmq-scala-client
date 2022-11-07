@@ -1,13 +1,15 @@
 package com.avast.clients.rabbitmq
 
-import cats.effect.{Blocker, Concurrent, ConcurrentEffect, ContextShift, Timer}
+import cats.effect.kernel.Temporal
+import cats.effect.std.Dispatcher
+import cats.effect.{Async, Sync}
 import cats.implicits.{catsSyntaxApplicativeError, toFunctorOps}
 import cats.syntax.flatMap._
 import com.avast.bytes.Bytes
 import com.avast.clients.rabbitmq.JavaConverters.AmqpPropertiesConversions
 import com.avast.clients.rabbitmq.api._
 import com.avast.clients.rabbitmq.logging.ImplicitContextLogger
-import com.avast.metrics.scalaeffectapi.Monitor
+//import com.avast.metrics.scalaeffectapi.Monitor
 import com.rabbitmq.client.{AMQP, Envelope}
 import org.slf4j.event.Level
 
@@ -16,24 +18,21 @@ import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util._
 
 // it's case-class to have `copy` method for free....
-final private[rabbitmq] case class ConsumerBase[F[_]: ConcurrentEffect: Timer, A](
+final private[rabbitmq] case class ConsumerBase[F[_]: Async: Dispatcher: Temporal, A](
     consumerName: String,
     queueName: String,
     redactPayload: Boolean,
-    blocker: Blocker,
     consumerLogger: ImplicitContextLogger[F],
-    consumerRootMonitor: Monitor[F])(implicit val contextShift: ContextShift[F], implicit val deliveryConverter: DeliveryConverter[A]) {
+//    consumerRootMonitor: Monitor[F]
+    )(implicit val deliveryConverter: DeliveryConverter[A]) {
 
-  val F: ConcurrentEffect[F] = ConcurrentEffect[F] // scalastyle:ignore
-
-  private val timeoutsMeter = consumerRootMonitor.meter("timeouts")
+//  private val timeoutsMeter = consumerRootMonitor.meter("timeouts")
 
   def parseDelivery(envelope: Envelope, rawBody: Bytes, properties: AMQP.BasicProperties): F[DeliveryWithContext[A]] = {
     implicit val dctx: DeliveryContext = DeliveryContext.from(envelope, properties)
     import dctx.fixedProperties
 
-    blocker
-      .delay(Try(deliveryConverter.convert(rawBody)))
+    Sync[F].delay(Try(deliveryConverter.convert(rawBody)))
       .flatMap[Delivery[A]] {
         case Success(Right(a)) =>
           val delivery = Delivery(a, fixedProperties.asScala, dctx.routingKey.value)
@@ -71,13 +70,14 @@ final private[rabbitmq] case class ConsumerBase[F[_]: ConcurrentEffect: Timer, A
     import dctx._
 
     if (processTimeout != Duration.Zero) {
-      Concurrent
+      Temporal[F]
         .timeout(result, processTimeout)
         .recoverWith {
           case e: TimeoutException =>
             customTimeoutAction >>
               consumerLogger.trace(e)(s"[$consumerName] Timeout for $messageId") >>
-              timeoutsMeter.mark >> {
+              // timeoutsMeter.mark >>
+              {
 
               lazy val msg = s"[$consumerName] Task timed-out after $processTimeout of processing delivery $messageId " +
                 s"with routing key ${delivery.routingKey}, applying DeliveryResult.$timeoutAction. " +

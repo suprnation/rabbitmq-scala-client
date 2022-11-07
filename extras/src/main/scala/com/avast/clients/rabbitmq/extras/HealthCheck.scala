@@ -1,7 +1,6 @@
 package com.avast.clients.rabbitmq.extras
 
-import cats.effect.Sync
-import cats.effect.concurrent.Ref
+import cats.effect.{Ref, Sync}
 import cats.implicits.catsSyntaxFlatMapOps
 import com.avast.clients.rabbitmq.extras.HealthCheckStatus.{Failure, Ok}
 import com.avast.clients.rabbitmq.logging.ImplicitContextLogger
